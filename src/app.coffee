@@ -1,6 +1,7 @@
 _              = require "underscore"
 eco            = require "eco"
 express        = require "express"
+vendorify      = require "vendorify"
 
 Snockets       = require "snockets"
 Snockets.compilers.eco =
@@ -19,37 +20,50 @@ resolveProxy = (req, res, next) ->
   req.connection.remoteAddress = ipAddress
   next()
 
-module.exports.app = app = express.createServer()
+module.exports = (options = {}) ->
+  app = express.createServer()
 
-app.configure "production", ->
-  process.addListener "uncaughtException", (err) ->
-    console.error "Uncaught exception: #{err}"
+  app.configure "production", ->
+    process.addListener "uncaughtException", (err) ->
+      console.error "Uncaught exception: #{err}"
 
-port = parseInt process.env.PORT or 8000
-app.listen port, ->
-  console.log "Listening on port " + app.address().port + "."
+  port = parseInt process.env.PORT or 8000
 
-app.use resolveProxy
+  vendorify.status options.vendorify, (results) ->
+    changed = _.compact _.map results, (result) ->
+      return result.name if _.any result.files, (file) -> file.changed
 
-logFormat = ":remote-addr :method :url (:status) took :response-time ms."
-app.use express.logger logFormat
+    cb = _.after _.size(changed), ->
+      app.listen port, ->
+        console.log "Listening on port " + app.address().port + "."
 
-app.use express.cookieParser()
-app.use express.session
-  secret: process.env.APP_SESSION_SECRET || "skjghskdjfhbqigohqdiouk"
+    vendorify.pull changed, (name) ->
+      console.log "Installed #{name}"
+      cb()
 
-app.use express.static "public"
+  app.use resolveProxy if options.resolveProxy?
 
-options =
-  src      : ["vendor", "app"]
-  buildDir : "tmp"
+  logFormat = ":remote-addr :method :url (:status) took :response-time ms."
+  app.use express.logger logFormat
 
-if process.env.NODE_ENV != "production"
-  options = _.extend options,
-    build          : false
-    buildFilenamer : (file) -> file
+  app.use express.cookieParser()
+  app.use express.session
+    secret: process.env.APP_SESSION_SECRET || "skjghskdjfhbqigohqdiouk"
 
-app.use express.assets options
+  app.use express.static "public"
 
-app.set "views",       "app/views"
-app.set "view engine", "eco"
+  options =
+    src      : ["vendor", "app"]
+    buildDir : "tmp"
+
+  if process.env.NODE_ENV != "production"
+    options = _.extend options,
+      build          : false
+      buildFilenamer : (file) -> file
+
+  app.use express.assets options
+
+  app.set "views",       "app/views"
+  app.set "view engine", "eco"
+
+  app
